@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root{font:16px/1.55 system-ui,sans-serif;color:#18283b;background:#eef3f8}
+  body{margin:0} main{max-width:1060px;margin:auto;padding:1.5rem}
+  header{background:#153759;color:white;padding:1.25rem 1.5rem;border-radius:12px}
+  h1,h2,p{margin:.25rem 0 .75rem}
+  section{background:white;border-radius:12px;padding:1rem;margin:1rem 0}
+  form,.filters{display:flex;align-items:end;flex-wrap:wrap;gap:.65rem;margin:.8rem 0}
+  label{display:grid;gap:.25rem;font-weight:600} input,select,button{font:inherit;padding:.45rem;border:1px solid #8192a4;border-radius:6px}
+  button{background:#153759;color:white;cursor:pointer} button:disabled{opacity:.55;cursor:wait}
+  ul{padding-left:1.25rem} li{margin:.5rem 0} li button{margin-left:.45rem}
+  [hidden]{display:none!important} #notice:not(:empty){margin:1rem 0} .quiet{color:#516477}
+  .period{display:block}.choices{width:100%}.choices label{display:block;font-weight:400}
+  #paper{display:none}
+  @media print{
+    :root{background:white;color:black} main{display:none} #paper{display:block;margin:15mm}
+    #paper h1{text-align:center} #paper table{width:100%;border-collapse:collapse;margin:1rem 0}
+    #paper th,#paper td{border:1px solid #777;padding:.4rem;vertical-align:top}
+    #paper tr{break-inside:avoid}
+  }
+</style>
+</head>
+<body>
+<main>
+  <header><h1>백암초 방과후 강사대장</h1><p id="identity">학교 Google 계정을 확인하고 있습니다.</p></header>
+  <p id="notice" role="status" aria-live="polite"></p>
+  <div id="workspace" hidden>
+    <section>
+      <h2>강사와 계약 조회</h2>
+      <div class="filters">
+        <label>강사 이름<input id="search" type="search"></label>
+        <label>학년도<select id="year-filter"></select></label>
+        <label>학교<select id="school-filter"></select></label>
+        <label>프로그램<input id="program-filter" type="search"></label>
+        <button id="reload" type="button">새로고침</button>
+      </div>
+      <ul id="teachers"></ul>
+      <form id="teacher-form" hidden>
+        <input name="id" type="hidden">
+        <label>강사 이름<input name="name" maxlength="80" required></label>
+        <button>강사 저장</button><button type="reset">입력 초기화</button>
+      </form>
+    </section>
+    <section id="contract-panel" hidden>
+      <h2>계약·활동 입력</h2>
+      <form id="contract-form">
+        <input name="id" type="hidden">
+        <label>강사<select name="teacherId" required></select></label>
+        <label>학년도<input name="year" type="number" min="2000" max="2100" required></label>
+        <label>학교<select name="school" required></select></label>
+        <label>프로그램<input name="program" maxlength="100" required></label>
+        <label>계약 상태<select name="status"><option>계약 예정</option><option>계약 중</option><option>활동 종료</option><option>계약 해지</option></select></label>
+        <label>계약 시작일<input name="start" type="date" required></label>
+        <label>계약 종료일<input name="end" type="date" required></label>
+        <label>실제 활동 시작일<input name="actualStart" type="date"></label>
+        <label>실제 활동 종료일<input name="actualEnd" type="date"></label>
+        <label>확인된 강의 시간<input name="hours" type="number" min="0" max="10000" step="any"></label>
+        <button>계약 저장</button><button type="reset">입력 초기화</button>
+      </form>
+    </section>
+    <section id="request-panel" hidden>
+      <h2>문서 발급 요청</h2>
+      <form id="request-form">
+        <label>강사<select name="teacherId" required></select></label>
+        <label>문서 종류<select name="type" required></select></label>
+        <fieldset id="contract-choices" class="choices"><legend>발급할 실제 활동 이력</legend></fieldset>
+        <button>발급 요청</button>
+      </form>
+    </section>
+    <section>
+      <h2>승인·발급대장</h2>
+      <ul id="requests"></ul>
+    </section>
+    <section id="user-panel" hidden>
+      <h2>담당자 권한</h2>
+      <form id="user-form">
+        <label>학교 이메일<input name="email" type="email" required></label>
+        <label>역할<select name="role"><option value="staff">업무 담당자</option><option value="approver">승인 담당자</option><option value="disabled">접근 해제</option></select></label>
+        <button>권한 저장</button>
+      </form>
+      <ul id="users"></ul>
+    </section>
+  </div>
+</main>
+<article id="paper"></article>
+
+<dialog id="preview">
+  <div id="preview-body"></div>
+  <button id="print" type="button">인쇄 / PDF 저장</button>
+  <form method="dialog"><button>닫기</button></form>
+</dialog>
+<style>
+  dialog{max-width:min(880px,90vw);border:1px solid #8192a4;border-radius:10px}
+  dialog td,dialog th{padding:.3rem;border-bottom:1px solid #ccd5dd}
+  @media print{dialog{display:none!important}}
+</style>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const teacherForm = $('teacher-form');
+const contractForm = $('contract-form');
+const requestForm = $('request-form');
+const userForm = $('user-form');
+let state;
+
+function element(tag, text) {
+  const node = document.createElement(tag);
+  node.textContent = text ?? '';
+  return node;
+}
+
+function button(text, callback) {
+  const control = element('button', text);
+  control.type = 'button';
+  control.addEventListener('click', callback);
+  return control;
+}
+
+function setOptions(select, options) {
+  const selected = select.value;
+  select.replaceChildren(...options.map(([value, label]) => new Option(label, value)));
+  if (options.some(([value]) => String(value) === selected)) select.value = selected;
+}
+
+function invoke(action, input = {}, success = '') {
+  $('notice').textContent = '처리 중입니다.';
+  const workspace = $('workspace');
+  workspace.inert = true;
+  google.script.run
+    .withSuccessHandler(result => {
+      state = result;
+      workspace.inert = false;
+      render();
+      workspace.hidden = false;
+      $('notice').textContent = success;
+    })
+    .withFailureHandler(error => {
+      workspace.inert = false;
+      if (!state) $('identity').textContent = '접속 확인';
+      $('notice').textContent = error.message;
+    })
+    .registerApi(action, input);
+}
+
+function fill(form, record) {
+  for (const [key, value] of Object.entries(record)) {
+    const field = form.elements.namedItem(key);
+    if (field) field.value = value ?? '';
+  }
+  form.scrollIntoView({block:'center'});
+  form.querySelector('input:not([type="hidden"]), select').focus();
+}
+
+function summary(record) {
+  return `${record.year}학년도 · ${record.school} · ${record.program} · ${record.status}`;
+}
+
+function renderTeachers() {
+  const search = $('search').value.trim().toLowerCase();
+  const year = $('year-filter').value;
+  const school = $('school-filter').value;
+  const program = $('program-filter').value.trim().toLowerCase();
+  const canEdit = ['admin', 'staff'].includes(state.role);
+  const list = [];
+  for (const teacher of state.teachers) {
+    if (!teacher.name.toLowerCase().includes(search)) continue;
+    const records = state.contracts.filter(record => record.teacherId === teacher.id
+      && (!year || String(record.year) === year) && (!school || record.school === school)
+      && (!program || record.program.toLowerCase().includes(program)));
+    if ((year || school || program) && !records.length) continue;
+    const row = element('li');
+    row.append(element('strong', teacherLabel(teacher)));
+    if (canEdit) row.append(button('강사 수정', () => fill(teacherForm, teacher)));
+    const details = element('ul');
+    for (const record of records.sort((a, b) => b.year - a.year || b.start.localeCompare(a.start))) {
+      const detail = element('li', summary(record));
+      const period = element('span', `계약 ${record.start} ~ ${record.end} · 활동 ${record.actualStart ? record.actualStart + ' ~ ' + record.actualEnd : '미확인'} · ${record.hours ?? '미확인'}${record.hours === null ? '' : '시간'}`);
+      period.className = 'period quiet';
+      detail.append(period);
+      if (canEdit) detail.append(button('계약 수정', () => fill(contractForm, record)));
+      details.append(detail);
+    }
+    if (details.childElementCount) row.append(details);
+    list.push(row);
+  }
+  $('teachers').replaceChildren(...(list.length ? list : [element('li','조회 결과가 없습니다.')]));
+}
+
+function teacherLabel(teacher) {
+  return `${teacher.name} (${teacher.id.slice(0, 8)})`;
+}
+
+function renderChoices() {
+  const choices = $('contract-choices');
+  choices.replaceChildren(element('legend','발급할 실제 활동 이력'));
+  const teacherId = requestForm.elements.teacherId.value;
+  const candidates = state.contracts.filter(record => record.teacherId === teacherId && record.actualStart);
+  for (const record of candidates) {
+    const label = element('label');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.name = 'contractIds';
+    checkbox.value = record.id;
+    label.append(checkbox, ' ' + summary(record) + ` (${record.actualStart} ~ ${record.actualEnd})`);
+    choices.append(label);
+  }
+}
+
+function localDate(iso) {
+  return new Intl.DateTimeFormat('ko-KR', {timeZone:'Asia/Seoul', dateStyle:'medium'}).format(new Date(iso));
+}
+
+function render() {
+  const {role, roles, email, schools, teachers, contracts, documents, requests, users} = state;
+  const canEdit = ['admin', 'staff'].includes(role);
+  const canReview = ['admin', 'approver'].includes(role);
+  $('identity').textContent = email + ' · ' + roles[role];
+  teacherForm.hidden = !canEdit;
+  $('contract-panel').hidden = !canEdit;
+  $('request-panel').hidden = !canEdit;
+  $('user-panel').hidden = role !== 'admin';
+  const options = [['','강사 선택'], ...teachers.map(teacher => [teacher.id, teacherLabel(teacher)])];
+  setOptions(contractForm.elements.teacherId, options);
+  setOptions(requestForm.elements.teacherId, options);
+  setOptions(contractForm.elements.school, schools.map(school => [school, school]));
+  setOptions(requestForm.elements.type, Object.entries(documents));
+  setOptions($('school-filter'), [['','전체 학교'], ...schools.map(school => [school, school])]);
+  const years = [...new Set(contracts.map(record => record.year))].sort((a,b) => b-a);
+  setOptions($('year-filter'), [['','전체 학년도'], ...years.map(year => [year, year])]);
+  renderTeachers();
+  renderChoices();
+  $('users').replaceChildren(...users.map(user => element('li', user.email + ' · ' + (roles[user.role] || '접근 해제'))));
+  $('requests').replaceChildren(...[...requests].reverse().map(request => {
+    const row = element('li', `${request.teacherName} · ${documents[request.type]} · ${request.status} · ${localDate(request.requestedAt)}`);
+    if (request.number) row.append(element('small', ' · ' + request.number));
+    if (request.status === '승인 대기' && canReview && request.requestedBy !== email) {
+      row.append(button('승인', () => review(request, '승인')), button('반려', () => review(request, '반려')));
+    }
+    row.append(button(request.status === '승인' ? '인쇄 / PDF 저장' : '발급 내용 보기', () => showDocument(request)));
+    return row;
+  }));
+}
+
+function review(request, status) {
+  if (confirm(`이 문서 요청을 ${status}하시겠습니까?`)) invoke('review', {id:request.id, status}, status + ' 처리했습니다.');
+}
+
+function showDocument(request) {
+  const dialog = $('preview');
+  const paper = $('paper');
+  const approved = request.status === '승인';
+  const documentTitle = state.documents[request.type];
+  const header = element('h1', documentTitle);
+  const details = element('p', `강사 성명  ${request.teacherName} · ${approved ? '발급번호 ' + request.number : request.status}`);
+  const table = element('table');
+  const columns = table.createTHead().insertRow();
+  for (const label of ['학년도','학교·프로그램','계약 기간','실제 활동 기간','확인 강의 시간']) columns.append(element('th',label));
+  const body = table.createTBody();
+  for (const record of request.records) {
+    const row = body.insertRow();
+    for (const value of [record.year, record.school + ' · ' + record.program, record.start + ' ~ ' + record.end,
+      record.actualStart + ' ~ ' + record.actualEnd, record.hours === null ? '미확인' : record.hours + '시간']) {
+      row.append(element('td',value));
+    }
+  }
+  const date = element('p', approved ? '승인일 ' + localDate(request.reviewedAt) : '승인 후 인쇄할 수 있습니다.');
+  const note = element('p', '백암초등학교 · 학교 양식 적용 전 확인용');
+  const content = [header, details, table, date, note];
+  $('preview-body').replaceChildren(...content.map(node => node.cloneNode(true)));
+  paper.replaceChildren(...(approved ? content : []));
+  $('print').hidden = !approved;
+  dialog.showModal();
+}
+
+function bindForm(form, action, message) {
+  form.addEventListener('submit', event => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const input = Object.fromEntries(data);
+    if (action === 'request') input.contractIds = data.getAll('contractIds');
+    invoke(action, input, message);
+  });
+}
+
+bindForm(teacherForm, 'teacher', '강사 기록을 저장했습니다.');
+bindForm(contractForm, 'contract', '계약 기록을 저장했습니다.');
+bindForm(requestForm, 'request', '발급을 요청했습니다.');
+bindForm(userForm, 'user', '담당자 권한을 저장했습니다.');
+for (const id of ['search','year-filter','school-filter','program-filter']) $(id).addEventListener('input', renderTeachers);
+requestForm.elements.teacherId.addEventListener('change', renderChoices);
+$('reload').addEventListener('click', () => invoke('read'));
+$('print').addEventListener('click', () => window.print());
+window.addEventListener('afterprint', () => { if ($('preview').open) $('preview').close(); });
+$('preview').addEventListener('close', () => $('paper').replaceChildren());
+window.addEventListener('DOMContentLoaded', () => invoke('read'));
+</script>
+</body>
+</html>
