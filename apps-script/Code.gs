@@ -6,9 +6,9 @@ const TABLES = ['강사', '계약', '발급'];
 function onOpen() {
   SpreadsheetApp.getUi().createMenu('강사대장 설정')
     .addItem('대장 초기화', 'setupRegister_')
-    .addItem('관리자 비밀번호 발급', 'issueAdminPassword_')
-    .addItem('업무 담당자 비밀번호 발급', 'issueStaffPassword_')
-    .addItem('승인 담당자 비밀번호 발급', 'issueApproverPassword_')
+    .addItem('관리자 비밀번호 설정', 'issueAdminPassword_')
+    .addItem('업무 담당자 비밀번호 설정', 'issueStaffPassword_')
+    .addItem('승인 담당자 비밀번호 설정', 'issueApproverPassword_')
     .addToUi();
 }
 
@@ -22,10 +22,21 @@ function issueRolePassword_(role) {
   if (!owner || Session.getActiveUser().getEmail() !== owner.getEmail()) throw new Error('대장 소유자만 비밀번호를 발급할 수 있습니다.');
   const ui = SpreadsheetApp.getUi();
   const title = ROLES[role] + ' 비밀번호';
-  if (ui.alert(title, '새로 발급하면 이 역할의 이전 비밀번호와 접속 세션이 종료됩니다. 발급할까요?', ui.ButtonSet.YES_NO) !== ui.Button.YES) return;
-  const password = randomRegisterToken_();
+  const setup = HtmlService.createHtmlOutputFromFile('Password').setWidth(400).setHeight(235);
+  setup.append('<script>document.getElementById("role").value = ' + JSON.stringify(role) + ';</script>');
+  ui.showModalDialog(setup, title + ' 설정');
+}
+
+function setRolePasswordFromSheet(role, password) {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const owner = spreadsheet?.getOwner();
+  if (!owner || Session.getActiveUser().getEmail() !== owner.getEmail()) throw new Error('대장 소유자만 비밀번호를 설정할 수 있습니다.');
+  if (!Object.hasOwn(ROLES, role) || !validRolePassword_(password)) throw new Error('비밀번호는 9~128자로 입력하세요.');
   PropertiesService.getScriptProperties().setProperty('role-password:' + role, registerDigest_(password));
-  ui.alert(title, '닫으면 비밀번호를 다시 볼 수 없습니다.\n\n' + password, ui.ButtonSet.OK);
+}
+
+function validRolePassword_(value) {
+  return typeof value === 'string' && value.length >= 9 && value.length <= 128 && value.trim() === value;
 }
 
 function randomRegisterToken_() {
@@ -38,7 +49,7 @@ function registerDigest_(value) {
 
 function registerLogin(role, password) {
   const invalid = '역할과 비밀번호를 확인하세요.';
-  if (!Object.hasOwn(ROLES, role) || typeof password !== 'string' || !/^[a-f0-9]{64}$/.test(password)) throw new Error(invalid);
+  if (!Object.hasOwn(ROLES, role) || !validRolePassword_(password)) throw new Error(invalid);
   const properties = PropertiesService.getScriptProperties();
   const expected = properties.getProperty('role-password:' + role);
   if (!expected || expected !== registerDigest_(password)) throw new Error(invalid);
