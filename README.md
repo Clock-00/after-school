@@ -1,22 +1,30 @@
-# 백암초 방과후 통합 관리 — GitHub Pages 입문용
+# 백암초 방과후 통합 관리
 
-**주의: 화면 시연용입니다.** 로그인, 실제 데이터 저장, PDF, 승인 기능은 아직 없습니다. 실제 학생·강사 개인정보, 비밀번호, API 키, 계약서 등을 공개 저장소에 올리지 마세요.
+백암초 본교와 수정분교장의 방과후학교 업무를 위한 GitHub Pages 시연 사이트입니다. 1단계는 가상 강사 목록과 경력 조회를 제공합니다. 실제 강사·학생 개인정보, 증빙자료, 비밀번호, API 키는 공개 저장소에 올리지 마세요.
 
 ## 파일 안내
-- `index.html`: 웹사이트의 구조와 글
-- `style.css`: 색상, 크기, 모바일 화면 모양
-- `script.js`: 메뉴 이동과 시연용 가상 강사 검색
 
-## GitHub에 게시하기
-1. https://github.com 에 가입하고 로그인합니다.
-2. 우측 상단 `+` → `New repository`를 누릅니다.
-3. Repository name에 `after-school`을 입력하고 Public을 선택한 뒤 `Create repository`를 누릅니다.
-4. 저장소 화면에서 `uploading an existing file` 또는 `Add file` → `Upload files`를 선택합니다.
-5. **ZIP 자체가 아니라 압축 해제한 폴더 안의** `index.html`, `style.css`, `script.js`, `README.md` 4개 파일을 업로드합니다.
-6. `Commit changes`를 누릅니다.
-7. `Settings` → `Pages` → Build and deployment에서 Source=`Deploy from a branch`, Branch=`main`, Folder=`/(root)`를 선택해 Save 합니다.
-8. 잠시 후 `https://본인아이디.github.io/after-school/` 주소로 접속합니다.
+- `index.html` — 대시보드, 메뉴, 강사 목록과 경력 상세 화면
+- `style.css` — 기존 색상과 레이아웃, PC·모바일 화면
+- `script.js` — 메뉴 이동, 부분 이름 검색, 학년도·학교·프로그램 필터, 강사 상세 화면
+- `demo-data.js` — 학교, 강사 ID, 가상 계약 및 활동 이력
+- `README.md` — 실행과 배포 안내
 
-계정 이름과 저장소 이름에 따라 주소가 달라집니다. 게시 후 실제 데이터 연결 전 인증·권한·백엔드 보안 설계가 필요합니다.
+## 내 컴퓨터에서 확인
 
-공식 안내: https://docs.github.com/ko/pages/getting-started-with-github-pages/creating-a-github-pages-site
+저장소에서 **Code → Download ZIP**을 선택하고 압축을 풉니다. `index.html`을 브라우저에서 엽니다. 별도의 설치나 빌드 과정 없이 실행할 수 있습니다.
+
+1. **강사 관리**에서 `가람`을 입력합니다. 이름이 같은 강사 두 명을 ID와 담당 프로그램으로 구분할 수 있습니다.
+2. **강사 경력관리**에서 `가람`, 2025학년도, 수정분교장, 합주를 선택합니다. 경력 1건이 표시됩니다.
+3. 결과의 이름을 누릅니다. 해당 강사의 전체 학년도 및 양쪽 학교 경력이 표시됩니다. 계약기간, 실제 활동기간과 확인된 강의시간은 각각 표시되며, 미확인 항목에는 `미확인`이 표시됩니다.
+4. **검색 결과로** 돌아가면 선택한 검색 조건이 유지됩니다. **검색 조건 초기화**를 누르면 전체 경력이 표시됩니다.
+
+## 기존 GitHub Pages에 반영
+
+1. GitHub의 [기존 저장소](https://github.com/Clock-00/after-school)에서 **Pull requests**를 열고 1단계 변경 제안을 선택합니다.
+2. **Files changed**에서 변경 사항을 검토한 다음 **Merge pull request → Confirm merge**를 누릅니다. 초안 상태라면 먼저 **Ready for review**를 누릅니다.
+3. **Actions**에서 Pages 배포 작업이 성공했는지 확인한 뒤 [기존 사이트](https://clock-00.github.io/after-school/)를 새로고침합니다. 배포 상태와 소스 설정은 **Settings → Pages**에서도 확인할 수 있습니다.
+
+## 다음 단계 준비
+
+학교에서 사용할 로그인 계정과 관리자·업무 담당자·승인 담당자의 권한 범위를 정합니다. 학교가 승인한 비공개 저장소와 서버에서 데이터 접근 권한을 검증할 방법을 검토하고, 증빙자료 접근 범위 및 보존·삭제 기준을 정합니다. 문서 발급 단계에는 학교 공식 양식과 전자결재 및 직인 반영 기준이 필요합니다.
