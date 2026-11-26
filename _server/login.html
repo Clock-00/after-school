@@ -12,12 +12,20 @@
     <h1>백암초 방과후 업무 로그인</h1>
     <p id="notice" role="status" aria-live="polite"></p>
     <section class="panel" id="sign-in">
-      <h2>이메일 로그인</h2>
-      <form id="email-form">
-        <label>초대받은 이메일 <input name="email" type="email" autocomplete="email" required></label>
-        <button class="secondary-button">로그인 링크 받기</button>
+      <h2>역할별 로그인</h2>
+      <form id="login-form">
+        <label>역할
+          <select name="role" required>
+            <option value="">역할을 선택하세요</option>
+            <option value="staff">업무 담당자</option>
+            <option value="approver">승인 담당자</option>
+            <option value="admin">관리자</option>
+          </select>
+        </label>
+        <label>아이디 <input name="id" autocomplete="username" required></label>
+        <label>비밀번호 <input name="password" type="password" autocomplete="current-password" required></label>
+        <button class="secondary-button">로그인</button>
       </form>
-      <button class="secondary-button" id="use-link" hidden>이 링크로 로그인</button>
     </section>
     <section class="panel" id="account" hidden>
       <h2>내 계정</h2>
@@ -27,16 +35,17 @@
       <ul id="records"></ul>
     </section>
     <section class="panel" id="admin" hidden>
-      <h2>사용자 초대</h2>
-      <form id="invite-form">
-        <label>이메일 <input name="email" type="email" required></label>
+      <h2>담당자 계정 등록</h2>
+      <form id="register-form">
+        <label>아이디 <input name="id" maxlength="254" required></label>
         <label>역할
           <select name="role">
             <option value="staff">업무 담당자</option>
             <option value="approver">승인 담당자</option>
           </select>
         </label>
-        <button class="secondary-button">초대 보내기</button>
+        <label>초기 비밀번호 <input name="password" type="password" autocomplete="new-password" minlength="12" required></label>
+        <button class="secondary-button">계정 등록</button>
       </form>
       <h2>사용자 목록</h2>
       <ul id="users"></ul>

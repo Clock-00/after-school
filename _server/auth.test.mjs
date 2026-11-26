@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { once } from 'node:events';
 import { test } from 'node:test';
 
-test('초대, 일회용 링크, 역할 검사 및 접근 해제', { timeout: 15000 }, async t => {
+test('역할별 로그인, 계정 등록 및 접근 해제', { timeout: 15000 }, async t => {
   const directory = await mkdtemp(join(tmpdir(), 'after-school-auth-'));
   const probe = createServer();
   probe.listen(0, '127.0.0.1');
@@ -17,8 +17,8 @@ test('초대, 일회용 링크, 역할 검사 및 접근 해제', { timeout: 150
   const origin = `http://127.0.0.1:${port}`;
   const server = spawn(process.execPath, ['app.mjs'], {
     env: {
-      ...process.env, APP_ORIGIN: origin, PORT: String(port), DEMO_MAIL: '1',
-      ADMIN_EMAIL: 'admin@example.test', DATA_DIR: directory,
+      ...process.env, APP_ORIGIN: origin, PORT: String(port), LOCAL_DEMO: '1',
+      ADMIN_ID: 'school-admin', ADMIN_PASSWORD: 'example-admin-password', DATA_DIR: directory,
     },
   });
   const exited = once(server, 'exit');
@@ -43,10 +43,6 @@ test('초대, 일회용 링크, 역할 검사 및 접근 해제', { timeout: 150
   }
 
   await waitFor(() => output.includes('로그인 서비스 시작'));
-  const mailToken = email => waitFor(() => {
-    const line = output.split('\n').find(line => line.startsWith('[가상 메일] ' + email + ' '));
-    return line?.split('#token=')[1];
-  });
   function call(path, { body, cookie, from = origin } = {}) {
     const headers = cookie ? { Cookie: cookie } : {};
     return fetch(origin + '/api/' + path, body === undefined ? { headers } : {
@@ -55,41 +51,46 @@ test('초대, 일회용 링크, 역할 검사 및 접근 해제', { timeout: 150
     });
   }
 
-  const staff = 'staff@example.test';
-  const unknown = 'unknown@example.test';
-  const approver = 'approver@example.test';
-  async function signIn(email) {
-    const token = await mailToken(email);
-    const response = await call('exchange', { body: { token } });
+  const account = {
+    admin: { id: 'school-admin', role: 'admin', password: 'example-admin-password' },
+    staff: { id: 'school-staff', role: 'staff', password: 'example-staff-password' },
+    approver: { id: 'school-approver', role: 'approver', password: 'example-approver-password' },
+  };
+  async function signIn(credentials) {
+    const response = await call('login', { body: credentials });
     assert.equal(response.status, 200);
     assert.match(response.headers.get('Set-Cookie'), /HttpOnly; SameSite=Lax/);
-    assert.equal((await call('exchange', { body: { token } })).status, 401);
     return response.headers.get('Set-Cookie').split(';')[0];
   }
 
+  const page = await fetch(origin);
+  assert.match(await page.text(), /역할별 로그인/);
   assert.equal((await call('demo-records')).status, 401);
-  assert.equal((await call('login', { from: 'https://other.example.test', body: { email: 'admin@example.test' } })).status, 403);
-  const unknownLogin = await call('login', { body: { email: unknown } });
-  assert.equal(unknownLogin.status, 202);
-  assert.deepEqual(await unknownLogin.json(), {});
-  assert.equal((await call('login', { body: { email: 'admin@example.test' } })).status, 202);
-  const admin = await signIn('admin@example.test');
-  assert.equal((await call('invite', { cookie: admin, body: { email: staff, role: 'admin' } })).status, 400);
-  assert.equal((await call('invite', { cookie: admin, body: { email: staff, role: 'staff' } })).status, 200);
-  const staffCookie = await signIn(staff);
-  assert.equal((await (await call('me', { cookie: staffCookie })).json()).role, 'staff');
-  assert.equal((await call('demo-records', { cookie: staffCookie })).status, 200);
-  assert.equal((await call('users', { cookie: staffCookie })).status, 403);
-  assert.equal((await call('invite', { cookie: staffCookie, body: { email: unknown, role: 'staff' } })).status, 403);
+  assert.equal((await call('login', { from: 'https://other.example.test', body: account.admin })).status, 403);
+  assert.equal((await call('login', { body: { ...account.admin, password: 'incorrect-password' } })).status, 401);
+  assert.equal((await call('login', { body: { ...account.admin, role: 'staff' } })).status, 401);
+  const admin = await signIn(account.admin);
+  assert.equal((await call('users', { cookie: admin, body: { ...account.staff, role: 'admin' } })).status, 400);
+  assert.equal((await call('users', { cookie: admin, body: account.staff })).status, 201);
+  assert.equal((await call('users', { cookie: admin, body: account.staff })).status, 409);
+  assert.equal((await call('login', { body: { ...account.staff, role: 'admin' } })).status, 401);
+  const staff = await signIn(account.staff);
+  assert.deepEqual(await (await call('me', { cookie: staff })).json(), { id: account.staff.id, role: 'staff' });
+  assert.equal((await call('demo-records', { cookie: staff })).status, 200);
+  assert.equal((await call('users', { cookie: staff })).status, 403);
+  assert.equal((await call('users', { cookie: staff, body: account.approver })).status, 403);
 
-  assert.equal((await call('invite', { cookie: admin, body: { email: approver, role: 'approver' } })).status, 200);
-  const pending = await mailToken(approver);
-  assert.equal((await call('revoke', { cookie: admin, body: { email: approver } })).status, 200);
-  assert.equal((await call('exchange', { body: { token: pending } })).status, 401);
+  assert.equal((await call('users', { cookie: admin, body: account.approver })).status, 201);
+  const approver = await signIn(account.approver);
+  assert.equal((await (await call('me', { cookie: approver })).json()).role, 'approver');
+  const users = await (await call('users', { cookie: admin })).json();
+  assert.deepEqual(users.map(user => Object.keys(user)), users.map(() => ['id', 'role', 'status']));
+  assert.ok(!JSON.stringify(users).includes(account.approver.password));
 
-  assert.equal((await call('revoke', { cookie: admin, body: { email: staff } })).status, 200);
-  assert.equal((await call('demo-records', { cookie: staffCookie })).status, 401);
+  assert.equal((await call('revoke', { cookie: admin, body: { id: account.staff.id } })).status, 200);
+  assert.equal((await call('demo-records', { cookie: staff })).status, 401);
+  assert.equal((await call('login', { body: account.staff })).status, 401);
   assert.equal((await call('logout', { cookie: admin, body: {} })).status, 200);
   assert.equal((await call('me', { cookie: admin })).status, 401);
-  assert.ok(!output.includes(unknown));
+  assert.ok(!output.includes(account.admin.password));
 });

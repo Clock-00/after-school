@@ -8,8 +8,5 @@
   "scripts": {
     "start": "node app.mjs",
     "test": "node --test auth.test.mjs"
-  },
-  "dependencies": {
-    "nodemailer": "^10.6.1"
   }
 }

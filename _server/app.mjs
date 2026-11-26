@@ -1,33 +1,33 @@
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from 'node:crypto';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import nodemailer from 'nodemailer';
+import { promisify } from 'node:util';
 
-const demo = process.env.DEMO_MAIL === '1';
+const local = process.env.LOCAL_DEMO === '1';
 const origin = new URL(process.env.APP_ORIGIN ?? 'http://127.0.0.1:3001');
-const admin = normalizeEmail(process.env.ADMIN_EMAIL ?? '');
+const admin = normalizeId(process.env.ADMIN_ID ?? '');
 const port = Number(process.env.PORT ?? 3001);
-const smtp = process.env.SMTP_URL;
-const sender = process.env.MAIL_FROM;
+const derivePassword = promisify(scrypt);
 
-function normalizeEmail(value) {
+function normalizeId(value) {
   return typeof value === 'string' ? value.trim().toLowerCase() : '';
 }
 
-function validEmail(email) {
-  return email.length <= 254 && /^[a-z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-z0-9.-]+\.[a-z]{2,}$/i.test(email)
-    && (!demo || email.endsWith('@example.test'));
+function validId(value) {
+  return /^[a-z0-9][a-z0-9._@+-]{2,253}$/.test(value);
 }
 
-if (!validEmail(admin) || (!demo && (origin.protocol !== 'https:' || !smtp || !sender))
-    || (demo && origin.origin !== `http://127.0.0.1:${port}`)) {
-  throw new Error('APP_ORIGIN, ADMIN_EMAIL 및 메일 설정을 확인하세요.');
+function validPassword(value) {
+  return typeof value === 'string' && value.length >= 12 && Buffer.byteLength(value) <= 256;
 }
 
-const mailer = demo ? null : nodemailer.createTransport(smtp, { requireTLS: true });
+if (!validId(admin) || (local ? origin.origin !== `http://127.0.0.1:${port}` : origin.protocol !== 'https:')) {
+  throw new Error('APP_ORIGIN 및 ADMIN_ID를 확인하세요.');
+}
+
 const dataDirectory = process.env.DATA_DIR ?? fileURLToPath(new URL('./data/', import.meta.url));
 mkdirSync(dataDirectory, { recursive: true, mode: 0o700 });
 const db = new DatabaseSync(join(dataDirectory, 'auth.sqlite'));
@@ -39,10 +39,10 @@ db.exec(`
     role TEXT NOT NULL CHECK (role IN ('admin', 'staff', 'approver')),
     status TEXT NOT NULL CHECK (status IN ('invited', 'active', 'revoked'))
   );
-  CREATE TABLE IF NOT EXISTS links (
-    hash TEXT PRIMARY KEY,
-    email TEXT NOT NULL REFERENCES users(email),
-    expires INTEGER NOT NULL
+  CREATE TABLE IF NOT EXISTS credentials (
+    email TEXT PRIMARY KEY REFERENCES users(email),
+    salt TEXT NOT NULL,
+    password_hash BLOB NOT NULL
   );
   CREATE TABLE IF NOT EXISTS sessions (
     hash TEXT PRIMARY KEY,
@@ -59,12 +59,26 @@ db.exec(`
 `);
 const existingAdmin = db.prepare("SELECT email FROM users WHERE role = 'admin'").get();
 if (existingAdmin && existingAdmin.email !== admin) {
-  throw new Error('기존 데이터베이스의 관리자와 ADMIN_EMAIL이 다릅니다.');
+  throw new Error('기존 데이터베이스의 관리자와 ADMIN_ID가 다릅니다.');
 }
-db.prepare("INSERT OR IGNORE INTO users VALUES (?, 'admin', 'invited')").run(admin);
+const startupPassword = process.env.ADMIN_PASSWORD;
+if (!db.prepare('SELECT email FROM credentials WHERE email = ?').get(admin)) {
+  if (!validPassword(startupPassword)) throw new Error('초기 ADMIN_PASSWORD를 12자 이상으로 설정하세요.');
+  const salt = randomBytes(16).toString('hex');
+  const passwordHash = scryptSync(startupPassword, salt, 64);
+  transaction(() => {
+    db.prepare("INSERT OR IGNORE INTO users VALUES (?, 'admin', 'active')").run(admin);
+    db.prepare("UPDATE users SET status = 'active' WHERE email = ? AND role = 'admin'").run(admin);
+    db.prepare('INSERT INTO credentials VALUES (?, ?, ?)').run(admin, salt, passwordHash);
+  });
+}
+if (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'links'").get()) {
+  transaction(() => {
+    db.exec('DROP TABLE links; DELETE FROM sessions');
+  });
+}
 
-const cookie = demo ? 'demo_session' : '__Host-session';
-const linkLifetime = 15 * 60;
+const cookie = local ? 'demo_session' : '__Host-session';
 const sessionLifetime = 8 * 60 * 60;
 const roles = ['staff', 'approver'];
 const digest = value => createHash('sha256').update(value).digest('hex');
@@ -75,18 +89,22 @@ const client = readFileSync(new URL('./login.js', import.meta.url));
 const stylesheet = readFileSync(new URL('../style.css', import.meta.url));
 const recent = new Map();
 
-function throttle(key, seconds) {
+function throttle(key, limit) {
   const time = now();
-  if ((recent.get(key) ?? 0) > time) return false;
-  if (recent.size >= 10000) return false;
-  recent.set(key, time + seconds);
+  const entry = recent.get(key);
+  if (entry && entry.expires > time) {
+    if (entry.attempts >= limit) return false;
+    entry.attempts++;
+    return true;
+  }
+  if (!entry && recent.size >= 10000) return false;
+  recent.set(key, { expires: time + 60, attempts: 1 });
   return true;
 }
 
 setInterval(() => {
   const time = now();
-  for (const [key, expiry] of recent) if (expiry <= time) recent.delete(key);
-  db.prepare('DELETE FROM links WHERE expires <= ?').run(time);
+  for (const [key, entry] of recent) if (entry.expires <= time) recent.delete(key);
   db.prepare('DELETE FROM sessions WHERE expires <= ?').run(time);
 }, 60_000).unref();
 
@@ -118,7 +136,7 @@ function sessionHash(request) {
 }
 
 function setSession(response, value, seconds) {
-  response.setHeader('Set-Cookie', `${cookie}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${seconds}${demo ? '' : '; Secure'}`);
+  response.setHeader('Set-Cookie', `${cookie}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${seconds}${local ? '' : '; Secure'}`);
 }
 
 async function readBody(request) {
@@ -132,40 +150,31 @@ async function readBody(request) {
   return value;
 }
 
-async function sendLink(email) {
-  const value = token();
-  const hash = digest(value);
-  db.prepare('INSERT INTO links VALUES (?, ?, ?)').run(hash, email, now() + linkLifetime);
-  const link = `${origin.origin}/#token=${value}`;
-  try {
-    if (demo) {
-      console.info(`[가상 메일] ${email} ${link}`);
-    } else {
-      await mailer.sendMail({
-        from: sender, to: email, subject: '백암초 방과후 업무 시스템 로그인',
-        text: `아래 링크를 열어 로그인하세요. 링크는 발송 후 15분 동안 한 번만 사용할 수 있습니다.\n\n${link}`,
-      });
-    }
-  } catch {
-    db.prepare('DELETE FROM links WHERE hash = ?').run(hash);
-    throw new Error('mail delivery failed');
-  }
-}
+const dummySalt = randomBytes(16).toString('hex');
+const dummyHash = randomBytes(64);
 
-function exchange(value) {
+async function authenticate(request, body) {
+  const id = normalizeId(body.id);
+  if (!validId(id) || !validPassword(body.password) || !['admin', ...roles].includes(body.role)) return null;
+  if (!throttle('login-address:' + request.socket.remoteAddress, 40)
+      || !throttle('login-id:' + id, 8)) return null;
+  const credential = db.prepare(`
+    SELECT users.role, credentials.salt, credentials.password_hash
+    FROM users JOIN credentials USING (email) WHERE users.email = ? AND users.status = 'active'
+  `).get(id);
+  const candidate = await derivePassword(body.password, credential?.salt ?? dummySalt, 64);
+  if (!timingSafeEqual(candidate, credential?.password_hash ?? dummyHash) || credential?.role !== body.role) return null;
+
   return transaction(() => {
-    const link = db.prepare(`
-      DELETE FROM links
-      WHERE hash = ? AND expires > ?
-        AND EXISTS (SELECT 1 FROM users WHERE users.email = links.email AND status != 'revoked')
-      RETURNING email
-    `).get(digest(value), now());
-    if (!link) return null;
-    db.prepare("UPDATE users SET status = 'active' WHERE email = ?").run(link.email);
-    db.prepare('DELETE FROM links WHERE email = ?').run(link.email);
+    const active = db.prepare(`
+      SELECT 1 FROM users JOIN credentials USING (email)
+      WHERE users.email = ? AND users.status = 'active' AND users.role = ? AND credentials.salt = ?
+    `).get(id, body.role, credential.salt);
+    if (!active) return null;
     const session = token();
-    db.prepare('INSERT INTO sessions VALUES (?, ?, ?)').run(digest(session), link.email, now() + sessionLifetime);
-    audit(link.email, 'login', link.email);
+    db.prepare('DELETE FROM sessions WHERE hash = ?').run(sessionHash(request));
+    db.prepare('INSERT INTO sessions VALUES (?, ?, ?)').run(digest(session), id, now() + sessionLifetime);
+    audit(id, 'login', id);
     return session;
   });
 }
@@ -179,7 +188,7 @@ async function handle(request, response) {
   const path = request.url.split('?')[0];
   if (request.method === 'GET') {
     const asset = { '/': [page, 'text/html; charset=utf-8'], '/login.js': [client, 'text/javascript; charset=utf-8'],
-      '/style.css': [stylesheet, 'text/css; charset=utf-8'] }[path];
+      '/style.css': [stylesheet, 'text/css; charset=utf-8'], __proto__: null }[path];
     if (asset) {
       response.writeHead(200, { 'Content-Type': asset[1] });
       response.end(asset[0]);
@@ -198,23 +207,15 @@ async function handle(request, response) {
     catch { return json(response, 400, { error: '요청 형식을 확인하세요.' }); }
   }
   if (key === 'POST /api/login') {
-    const email = normalizeEmail(body.email);
-    const user = validEmail(email) && db.prepare("SELECT email FROM users WHERE email = ? AND status != 'revoked'").get(email);
-    if (user && throttle('email:' + email, 60)) {
-      // Respond uniformly without waiting for SMTP or disclosing membership.
-      sendLink(email).catch(() => console.error('로그인 메일을 보내지 못했습니다.'));
-    }
-    return json(response, 202, {});
-  }
-  if (key === 'POST /api/exchange') {
-    const value = typeof body.token === 'string' && /^[\w-]{43}$/.test(body.token) && exchange(body.token);
-    if (!value) return json(response, 401, { error: '사용할 수 없는 링크입니다. 새 링크를 요청하세요.' });
-    setSession(response, value, sessionLifetime);
+    const session = await authenticate(request, body);
+    if (!session) return json(response, 401, { error: '역할과 아이디, 비밀번호를 확인하고 잠시 후 다시 시도하세요.' });
+    setSession(response, session, sessionLifetime);
     return json(response, 200, {});
   }
   const hash = sessionHash(request);
   const user = hash && db.prepare(`
-    SELECT users.email, users.role FROM sessions JOIN users USING (email)
+    SELECT users.email AS id, users.role
+    FROM sessions JOIN users USING (email) JOIN credentials USING (email)
     WHERE sessions.hash = ? AND sessions.expires > ? AND users.status = 'active'
   `).get(hash, now());
   if (!user) return json(response, 401, { error: '로그인이 필요합니다.' });
@@ -230,36 +231,49 @@ async function handle(request, response) {
   }
   if (user.role !== 'admin') return json(response, 403, { error: '관리자 권한이 필요합니다.' });
   if (key === 'GET /api/users') {
-    return json(response, 200, db.prepare('SELECT email, role, status FROM users ORDER BY email').all());
+    return json(response, 200, db.prepare(`
+      SELECT users.email AS id, role, CASE
+        WHEN status = 'revoked' THEN 'revoked'
+        WHEN credentials.email IS NOT NULL THEN 'active'
+        ELSE 'pending'
+      END AS status
+      FROM users LEFT JOIN credentials USING (email) ORDER BY users.email
+    `).all());
   }
-  if (key === 'POST /api/invite') {
-    const email = normalizeEmail(body.email);
-    if (!validEmail(email) || !roles.includes(body.role)) return json(response, 400, { error: '이메일과 역할을 확인하세요.' });
+  if (key === 'POST /api/users') {
+    const id = normalizeId(body.id);
+    if (!validId(id) || !roles.includes(body.role) || !validPassword(body.password)) {
+      return json(response, 400, { error: '아이디와 역할, 12자 이상의 비밀번호를 확인하세요.' });
+    }
+    const salt = randomBytes(16).toString('hex');
+    const passwordHash = await derivePassword(body.password, salt, 64);
     const assigned = transaction(() => {
-      const existing = db.prepare('SELECT role, status FROM users WHERE email = ?').get(email);
-      if (existing && (existing.role === 'admin' || existing.status === 'active'
-        || (existing.status === 'invited' && existing.role !== body.role))) return false;
-      if (!throttle('invite:' + email, 60)) return false;
+      const session = db.prepare('SELECT 1 FROM sessions WHERE hash = ? AND expires > ?').get(hash, now());
+      if (!session) return false;
+      const existing = db.prepare('SELECT role, status FROM users WHERE email = ?').get(id);
+      if (existing?.role === 'admin' || (existing?.status === 'active'
+        && db.prepare('SELECT 1 FROM credentials WHERE email = ?').get(id))) return false;
       db.prepare(`
-        INSERT INTO users VALUES (?, ?, 'invited')
-        ON CONFLICT(email) DO UPDATE SET role = excluded.role, status = 'invited'
-      `).run(email, body.role);
-      audit(user.email, 'invite', email);
+        INSERT INTO users VALUES (?, ?, 'active')
+        ON CONFLICT(email) DO UPDATE SET role = excluded.role, status = 'active'
+      `).run(id, body.role);
+      db.prepare(`
+        INSERT INTO credentials VALUES (?, ?, ?)
+        ON CONFLICT(email) DO UPDATE SET salt = excluded.salt, password_hash = excluded.password_hash
+      `).run(id, salt, passwordHash);
+      audit(user.id, 'register', id);
       return true;
     });
-    if (!assigned) return json(response, 409, { error: '이미 등록되어 있거나 최근 초대했습니다.' });
-    try { await sendLink(email); }
-    catch { return json(response, 502, { error: '메일을 보내지 못했습니다. 잠시 후 다시 초대하세요.' }); }
-    return json(response, 200, {});
+    return assigned ? json(response, 201, {}) : json(response, 409, { error: '계정을 등록할 수 없습니다.' });
   }
   if (key === 'POST /api/revoke') {
-    const email = normalizeEmail(body.email);
+    const id = normalizeId(body.id);
     const result = transaction(() => {
-      const update = db.prepare("UPDATE users SET status = 'revoked' WHERE email = ? AND role != 'admin' AND status != 'revoked'").run(email);
+      const update = db.prepare("UPDATE users SET status = 'revoked' WHERE email = ? AND role != 'admin' AND status != 'revoked'").run(id);
       if (!update.changes) return false;
-      db.prepare('DELETE FROM links WHERE email = ?').run(email);
-      db.prepare('DELETE FROM sessions WHERE email = ?').run(email);
-      audit(user.email, 'revoke', email);
+      db.prepare('DELETE FROM credentials WHERE email = ?').run(id);
+      db.prepare('DELETE FROM sessions WHERE email = ?').run(id);
+      audit(user.id, 'revoke', id);
       return true;
     });
     return result ? json(response, 200, {}) : json(response, 409, { error: '접근을 해제할 수 없습니다.' });
@@ -275,5 +289,5 @@ const server = createServer((request, response) => {
   });
 });
 server.requestTimeout = 15000;
-server.listen(port, demo ? '127.0.0.1' : (process.env.BIND_HOST ?? '127.0.0.1'),
+server.listen(port, local ? '127.0.0.1' : (process.env.BIND_HOST ?? '127.0.0.1'),
   () => console.info(`로그인 서비스 시작: ${origin.origin}`));
