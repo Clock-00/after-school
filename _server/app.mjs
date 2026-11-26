@@ -87,6 +87,19 @@ const now = () => Math.floor(Date.now() / 1000);
 const page = readFileSync(new URL('./login.html', import.meta.url));
 const client = readFileSync(new URL('./login.js', import.meta.url));
 const stylesheet = readFileSync(new URL('../style.css', import.meta.url));
+const dashboard = readFileSync(new URL('../index.html', import.meta.url), 'utf-8')
+  .replace('<!-- account-navigation -->', '<a class="nav-item" href="/account">내 계정·로그아웃</a>')
+  .replace('로그인, 실제 개인정보 저장', '실제 개인정보 저장');
+const dashboardAssets = new Map([
+  ['/app', [dashboard, 'text/html; charset=utf-8']],
+  ['/script.js', [readFileSync(new URL('../script.js', import.meta.url)), 'text/javascript; charset=utf-8']],
+  ['/demo-data.js', [readFileSync(new URL('../demo-data.js', import.meta.url)), 'text/javascript; charset=utf-8']],
+]);
+const publicAssets = new Map([
+  ['/login.js', [client, 'text/javascript; charset=utf-8']],
+  ['/style.css', [stylesheet, 'text/css; charset=utf-8']],
+]);
+
 const recent = new Map();
 
 function throttle(key, limit) {
@@ -179,6 +192,16 @@ async function authenticate(request, body) {
   });
 }
 
+function serveAsset(response, [content, type]) {
+  response.writeHead(200, { 'Content-Type': type });
+  response.end(content);
+}
+
+function redirect(response, location) {
+  response.writeHead(303, { Location: location });
+  response.end();
+}
+
 async function handle(request, response) {
   response.setHeader('Cache-Control', 'no-store');
   response.setHeader('Referrer-Policy', 'no-referrer');
@@ -186,14 +209,8 @@ async function handle(request, response) {
   response.setHeader('Content-Security-Policy',
     "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'");
   const path = request.url.split('?')[0];
-  if (request.method === 'GET') {
-    const asset = { '/': [page, 'text/html; charset=utf-8'], '/login.js': [client, 'text/javascript; charset=utf-8'],
-      '/style.css': [stylesheet, 'text/css; charset=utf-8'], __proto__: null }[path];
-    if (asset) {
-      response.writeHead(200, { 'Content-Type': asset[1] });
-      response.end(asset[0]);
-      return;
-    }
+  if (request.method === 'GET' && publicAssets.has(path)) {
+    return serveAsset(response, publicAssets.get(path));
   }
   if (request.method === 'POST' && (request.headers.origin !== origin.origin
     || request.headers['content-type'] !== 'application/json')) {
@@ -218,6 +235,20 @@ async function handle(request, response) {
     FROM sessions JOIN users USING (email) JOIN credentials USING (email)
     WHERE sessions.hash = ? AND sessions.expires > ? AND users.status = 'active'
   `).get(hash, now());
+  if (request.method === 'GET') {
+    if (path === '/' || path === '/index.html') {
+      if (user) return redirect(response, '/app');
+      return serveAsset(response, [page, 'text/html; charset=utf-8']);
+    }
+    if (path === '/account') {
+      if (!user) return redirect(response, '/');
+      return serveAsset(response, [page, 'text/html; charset=utf-8']);
+    }
+    if (dashboardAssets.has(path)) {
+      if (!user && path === '/app') return redirect(response, '/');
+      if (user) return serveAsset(response, dashboardAssets.get(path));
+    }
+  }
   if (!user) return json(response, 401, { error: '로그인이 필요합니다.' });
 
   if (key === 'GET /api/me') return json(response, 200, user);

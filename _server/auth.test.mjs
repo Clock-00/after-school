@@ -65,6 +65,13 @@ test('역할별 로그인, 계정 등록 및 접근 해제', { timeout: 15000 },
 
   const page = await fetch(origin);
   assert.match(await page.text(), /역할별 로그인/);
+  const open = (path, session) => fetch(origin + path, {
+    headers: session ? { Cookie: session } : {},
+    redirect: 'manual',
+  });
+  assert.equal((await open('/app')).headers.get('location'), '/');
+  assert.equal((await open('/account')).headers.get('location'), '/');
+  assert.equal((await open('/demo-data.js')).status, 401);
   assert.equal((await call('demo-records')).status, 401);
   assert.equal((await call('login', { from: 'https://other.example.test', body: account.admin })).status, 403);
   assert.equal((await call('login', { body: { ...account.admin, password: 'incorrect-password' } })).status, 401);
@@ -75,6 +82,14 @@ test('역할별 로그인, 계정 등록 및 접근 해제', { timeout: 15000 },
   assert.equal((await call('users', { cookie: admin, body: account.staff })).status, 409);
   assert.equal((await call('login', { body: { ...account.staff, role: 'admin' } })).status, 401);
   const staff = await signIn(account.staff);
+  assert.equal((await open('/', staff)).headers.get('location'), '/app');
+  const dashboard = await open('/app', staff);
+  assert.equal(dashboard.status, 200);
+  const dashboardHtml = await dashboard.text();
+  assert.match(dashboardHtml, /방과후학교 대시보드/);
+  assert.doesNotMatch(dashboardHtml, /출석부·출근부/);
+  assert.equal((await open('/script.js', staff)).status, 200);
+  assert.equal((await open('/demo-data.js', staff)).status, 200);
   assert.deepEqual(await (await call('me', { cookie: staff })).json(), { id: account.staff.id, role: 'staff' });
   assert.equal((await call('demo-records', { cookie: staff })).status, 200);
   assert.equal((await call('users', { cookie: staff })).status, 403);
@@ -89,6 +104,7 @@ test('역할별 로그인, 계정 등록 및 접근 해제', { timeout: 15000 },
 
   assert.equal((await call('revoke', { cookie: admin, body: { id: account.staff.id } })).status, 200);
   assert.equal((await call('demo-records', { cookie: staff })).status, 401);
+  assert.equal((await open('/app', staff)).headers.get('location'), '/');
   assert.equal((await call('login', { body: account.staff })).status, 401);
   assert.equal((await call('logout', { cookie: admin, body: {} })).status, 200);
   assert.equal((await call('me', { cookie: admin })).status, 401);
