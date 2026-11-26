@@ -3,10 +3,83 @@ const ROLES = {admin: '관리자', staff: '업무 담당자', approver: '승인 
 const DOCUMENTS = {activity: '방과후학교 강사 활동확인서', career: '방과후학교 강사 경력증명서'};
 const TABLES = ['사용자', '강사', '계약', '발급'];
 
+function onOpen() {
+  SpreadsheetApp.getUi().createMenu('강사대장 설정')
+    .addItem('대장 초기화', 'setupRegister_')
+    .addItem('담당자 접속 코드 발급', 'issueRegisterCode_')
+    .addToUi();
+}
+
+function issueRegisterCode_() {
+  const ui = SpreadsheetApp.getUi();
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  const owner = spreadsheet.getOwner();
+  if (!owner || Session.getActiveUser().getEmail() !== owner.getEmail()) throw new Error('대장 소유자만 접속 코드를 발급할 수 있습니다.');
+  const answer = ui.prompt('접속 코드 발급', '등록된 담당자의 Google 이메일을 입력하세요.', ui.ButtonSet.OK_CANCEL);
+  if (answer.getSelectedButton() !== ui.Button.OK) return;
+  const email = answer.getResponseText().trim().toLowerCase();
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  let code;
+  try {
+    const user = rows_(spreadsheet, '사용자').find(record => record.email === email);
+    if (!user || !Object.hasOwn(ROLES, user.role)) throw new Error('등록된 담당자의 이메일을 확인하세요.');
+    code = randomRegisterToken_();
+    const properties = PropertiesService.getScriptProperties();
+    properties.setProperty('register-code:' + email, registerDigest_(code));
+    SpreadsheetApp.flush();
+  } finally {
+    lock.releaseLock();
+  }
+  ui.alert('접속 코드', '담당자에게 별도로 전달하세요. 닫으면 코드를 다시 볼 수 없습니다.\n\n' + code, ui.ButtonSet.OK);
+}
+
+function randomRegisterToken_() {
+  return (Utilities.getUuid() + Utilities.getUuid()).replace(/-/g, '');
+}
+
+function registerDigest_(value) {
+  return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value));
+}
+
+function registerLogin(email, role, code) {
+  email = typeof email === 'string' ? email.trim().toLowerCase() : '';
+  if (!Object.hasOwn(ROLES, role) || typeof code !== 'string' || !/^[a-f0-9]{64}$/.test(code)) {
+    throw new Error('아이디와 역할, 접속 코드를 확인하세요.');
+  }
+  const properties = PropertiesService.getScriptProperties();
+  const sheetId = properties.getProperty('REGISTER_SHEET');
+  const expected = properties.getProperty('register-code:' + email);
+  if (!sheetId || !expected || expected !== registerDigest_(code)
+      || !rows_(SpreadsheetApp.openById(sheetId), '사용자').some(user => user.email === email && user.role === role)) {
+    throw new Error('아이디와 역할, 접속 코드를 확인하세요.');
+  }
+  const token = randomRegisterToken_();
+  CacheService.getScriptCache().put('register-session:' + registerDigest_(token), JSON.stringify({email, role, expected}), 21600);
+  return token;
+}
+
+function registerLogout(token) {
+  if (typeof token === 'string' && /^[a-f0-9]{64}$/.test(token)) {
+    CacheService.getScriptCache().remove('register-session:' + registerDigest_(token));
+  }
+}
+
+function registerSession_(token, properties) {
+  if (typeof token !== 'string' || !/^[a-f0-9]{64}$/.test(token)) throw new Error('로그인이 필요합니다.');
+  const session = JSON.parse(CacheService.getScriptCache().get('register-session:' + registerDigest_(token)));
+  if (!session || properties.getProperty('register-code:' + session.email) !== session.expected) {
+    throw new Error('로그인이 필요합니다.');
+  }
+  return session;
+}
+
 function setupRegister_() {
   const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
   const admin = Session.getEffectiveUser().getEmail().trim().toLowerCase();
-  if (!spreadsheet || !admin) throw new Error('학교 계정으로 스프레드시트에 연결된 편집기에서 실행하세요.');
+  if (!spreadsheet || !admin || spreadsheet.getOwner()?.getEmail() !== Session.getActiveUser().getEmail()) {
+    throw new Error('대장 소유자 계정으로 연결된 스프레드시트에서 실행하세요.');
+  }
   const properties = PropertiesService.getScriptProperties();
   const configured = properties.getProperty('REGISTER_SHEET');
   if (configured && configured !== spreadsheet.getId()) throw new Error('이미 다른 대장이 연결되어 있습니다.');
@@ -25,15 +98,18 @@ function doGet() {
   return HtmlService.createHtmlOutputFromFile('Index').setTitle('백암초 방과후 강사대장');
 }
 
-function registerApi(action, input) {
-  const id = PropertiesService.getScriptProperties().getProperty('REGISTER_SHEET');
+function registerApi(token, action, input) {
+  const properties = PropertiesService.getScriptProperties();
+  const id = properties.getProperty('REGISTER_SHEET');
   if (!id) throw new Error('대장 초기 설정이 필요합니다.');
-  const email = Session.getActiveUser().getEmail().trim().toLowerCase();
-  if (!email) throw new Error('학교 Google 계정으로 접속하세요. 계정을 확인할 수 없습니다.');
   const sheet = SpreadsheetApp.openById(id);
   const lock = LockService.getScriptLock();
   if (action !== 'read') lock.waitLock(10000);
   try {
+    const {email, role} = registerSession_(token, properties);
+    if (!rows_(sheet, '사용자').some(user => user.email === email && user.role === role)) {
+      throw new Error('로그인이 필요합니다.');
+    }
     return handleRegister_(sheet, email, action, input || {});
   } finally {
     if (action !== 'read') {
@@ -102,12 +178,15 @@ function handleRegister_(sheet, email, action, input) {
     case 'user': {
       requireRole('admin');
       const target = text_(input.email, 254).toLowerCase();
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target) || target.split('@')[1] !== email.split('@')[1]
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(target)
           || !['staff', 'approver', 'disabled'].includes(input.role)) {
-        throw new Error('같은 학교 도메인의 이메일과 역할을 확인하세요.');
+        throw new Error('담당자의 이메일과 역할을 확인하세요.');
       }
       const prior = users.find(item => item.email === target);
       if (prior?.role === 'admin') throw new Error('초기 관리자 계정의 역할은 변경할 수 없습니다.');
+      if (prior && prior.role !== input.role) {
+        PropertiesService.getScriptProperties().deleteProperty('register-code:' + target);
+      }
       save_(sheet, '사용자', prior, {email: target, role: input.role, updatedBy: email, updatedAt: time});
       break;
     }

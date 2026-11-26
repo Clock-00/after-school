@@ -26,9 +26,19 @@
 </head>
 <body>
 <main>
-  <header><h1>백암초 방과후 강사대장</h1><p id="identity">학교 Google 계정을 확인하고 있습니다.</p></header>
+  <header><h1>백암초 방과후 강사대장</h1><p id="identity">역할을 선택하고 접속 코드를 입력하세요.</p></header>
   <p id="notice" role="status" aria-live="polite"></p>
+  <section id="login-panel">
+    <h2>역할별 로그인</h2>
+    <form id="login-form">
+      <label>역할<select name="role" required><option value="staff">업무 담당자</option><option value="approver">승인 담당자</option><option value="admin">관리자</option></select></label>
+      <label>아이디(이메일)<input name="email" type="email" autocomplete="username" required></label>
+      <label>접속 코드<input name="code" type="password" autocomplete="current-password" required></label>
+      <button>로그인</button>
+    </form>
+  </section>
   <div id="workspace" hidden>
+    <button id="logout" type="button">로그아웃</button>
     <section>
       <h2>강사와 계약 조회</h2>
       <div class="filters">
@@ -78,7 +88,7 @@
     <section id="user-panel" hidden>
       <h2>담당자 권한</h2>
       <form id="user-form">
-        <label>학교 이메일<input name="email" type="email" required></label>
+        <label>담당자 이메일<input name="email" type="email" required></label>
         <label>역할<select name="role"><option value="staff">업무 담당자</option><option value="approver">승인 담당자</option><option value="disabled">접근 해제</option></select></label>
         <button>권한 저장</button>
       </form>
@@ -106,6 +116,7 @@ const contractForm = $('contract-form');
 const requestForm = $('request-form');
 const userForm = $('user-form');
 let state;
+let session;
 
 function element(tag, text) {
   const node = document.createElement(tag);
@@ -136,14 +147,15 @@ function invoke(action, input = {}, success = '') {
       workspace.inert = false;
       render();
       workspace.hidden = false;
+      $('login-panel').hidden = true;
       $('notice').textContent = success;
     })
     .withFailureHandler(error => {
       workspace.inert = false;
-      if (!state) $('identity').textContent = '접속 확인';
+      if (error.message.includes('로그인이 필요합니다.')) resetLogin();
       $('notice').textContent = error.message;
     })
-    .registerApi(action, input);
+    .registerApi(session, action, input);
 }
 
 function fill(form, record) {
@@ -296,7 +308,38 @@ $('reload').addEventListener('click', () => invoke('read'));
 $('print').addEventListener('click', () => window.print());
 window.addEventListener('afterprint', () => { if ($('preview').open) $('preview').close(); });
 $('preview').addEventListener('close', () => $('paper').replaceChildren());
-window.addEventListener('DOMContentLoaded', () => invoke('read'));
+function resetLogin() {
+  session = undefined;
+  state = undefined;
+  $('workspace').hidden = true;
+  $('login-panel').hidden = false;
+  $('identity').textContent = '역할을 선택하고 접속 코드를 입력하세요.';
+  for (const id of ['teachers','users','requests','preview-body','paper']) $(id).replaceChildren();
+  for (const form of [teacherForm, contractForm, requestForm, userForm]) form.reset();
+}
+
+$('login-form').addEventListener('submit', event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const control = form.querySelector('button');
+  const {email, role, code} = Object.fromEntries(new FormData(form));
+  control.disabled = true;
+  google.script.run.withSuccessHandler(token => {
+    control.disabled = false;
+    form.elements.code.value = '';
+    session = token;
+    invoke('read');
+  }).withFailureHandler(error => {
+    control.disabled = false;
+    form.elements.code.value = '';
+    $('notice').textContent = error.message;
+  }).registerLogin(email, role, code);
+});
+$('logout').addEventListener('click', () => {
+  google.script.run.registerLogout(session);
+  resetLogin();
+  $('notice').textContent = '로그아웃했습니다.';
+});
 </script>
 </body>
 </html>
