@@ -62,12 +62,11 @@ async function refresh() {
   byId('admin').hidden = user?.role !== 'admin';
   byId('identity').textContent = user ? `${user.id} · ${roles[user.role]}` : '';
   byId('users').replaceChildren();
-  byId('records').replaceChildren();
-  if (!user) return;
-  const records = await api('demo-records');
-  byId('records').replaceChildren(...records.map(record =>
-    listItem(`${record.year}학년도 · ${record.program} · ${record.id}`)));
-  if (user.role === 'admin') await refreshUsers();
+  if (!user && location.pathname === '/account') {
+    location.replace('/');
+    return;
+  }
+  if (user?.role === 'admin') await refreshUsers();
 }
 
 action(byId('login-form'), 'submit', async () => {
@@ -76,14 +75,14 @@ action(byId('login-form'), 'submit', async () => {
   try {
     await api('login', { id: id.value, role: role.value, password: password.value });
     form.reset();
-    await refresh();
+    location.replace('/app');
   } finally {
     password.value = '';
   }
 });
 action(byId('logout'), 'click', async () => {
   await api('logout', {});
-  await refresh();
+  location.replace('/');
 });
 action(byId('register-form'), 'submit', async () => {
   const form = byId('register-form');
