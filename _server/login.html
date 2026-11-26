@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>백암초 방과후 업무 로그인</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/login.js" defer></script>
+</head>
+<body>
+  <main class="main">
+    <h1>백암초 방과후 업무 로그인</h1>
+    <p id="notice" role="status" aria-live="polite"></p>
+    <section class="panel" id="sign-in">
+      <h2>이메일 로그인</h2>
+      <form id="email-form">
+        <label>초대받은 이메일 <input name="email" type="email" autocomplete="email" required></label>
+        <button class="secondary-button">로그인 링크 받기</button>
+      </form>
+      <button class="secondary-button" id="use-link" hidden>이 링크로 로그인</button>
+    </section>
+    <section class="panel" id="account" hidden>
+      <h2>내 계정</h2>
+      <p id="identity"></p>
+      <button class="secondary-button" id="logout">로그아웃</button>
+      <h2>권한 확인용 가상 경력</h2>
+      <ul id="records"></ul>
+    </section>
+    <section class="panel" id="admin" hidden>
+      <h2>사용자 초대</h2>
+      <form id="invite-form">
+        <label>이메일 <input name="email" type="email" required></label>
+        <label>역할
+          <select name="role">
+            <option value="staff">업무 담당자</option>
+            <option value="approver">승인 담당자</option>
+          </select>
+        </label>
+        <button class="secondary-button">초대 보내기</button>
+      </form>
+      <h2>사용자 목록</h2>
+      <ul id="users"></ul>
+    </section>
+  </main>
+</body>
+</html>
