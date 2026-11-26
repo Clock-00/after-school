@@ -38,6 +38,17 @@
   </section>
   <div id="workspace" hidden>
     <button id="logout" type="button">로그아웃</button>
+    <details id="password-settings">
+      <summary>설정 · 비밀번호 변경</summary>
+      <form id="change-password">
+        <label>변경할 역할<select name="target" required></select></label>
+        <label>현재 내 역할 비밀번호<input name="current" type="password" autocomplete="current-password" required></label>
+        <label>새 비밀번호<input name="password" type="password" autocomplete="new-password" minlength="9" maxlength="128" required></label>
+        <label>새 비밀번호 확인<input name="confirmation" type="password" autocomplete="new-password" required></label>
+        <button>비밀번호 저장</button>
+      </form>
+      <p class="quiet">변경한 역할은 다시 로그인해야 합니다.</p>
+    </details>
     <section>
       <h2>강사와 계약 조회</h2>
       <div class="filters">
@@ -220,6 +231,7 @@ function render() {
   const canEdit = ['admin', 'staff'].includes(role);
   const canReview = ['admin', 'approver'].includes(role);
   $('identity').textContent = roles[role];
+  setOptions($('change-password').elements.target, role === 'admin' ? Object.entries(roles) : [[role, roles[role]]]);
   teacherForm.hidden = !canEdit;
   $('contract-panel').hidden = !canEdit;
   $('request-panel').hidden = !canEdit;
@@ -301,7 +313,8 @@ function resetLogin() {
   $('login-panel').hidden = false;
   $('identity').textContent = '역할을 선택하고 비밀번호를 입력하세요.';
   for (const id of ['teachers','requests','preview-body','paper']) $(id).replaceChildren();
-  for (const form of [teacherForm, contractForm, requestForm]) form.reset();
+  for (const form of [teacherForm, contractForm, requestForm, $('change-password')]) form.reset();
+  $('password-settings').open = false;
 }
 
 $('login-form').addEventListener('submit', event => {
@@ -320,6 +333,28 @@ $('login-form').addEventListener('submit', event => {
     form.elements.code.value = '';
     $('notice').textContent = error.message;
   }).registerLogin(role, code);
+});
+$('change-password').addEventListener('submit', event => {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const {target, current, password, confirmation} = Object.fromEntries(new FormData(form));
+  if (password !== confirmation) {
+    $('notice').textContent = '새 비밀번호와 확인 입력이 일치하지 않습니다.';
+    return;
+  }
+  const control = form.querySelector('button');
+  control.disabled = true;
+  google.script.run.withSuccessHandler(result => {
+    control.disabled = false;
+    form.reset();
+    if (result.signedOut) resetLogin();
+    $('notice').textContent = result.signedOut ? '비밀번호를 변경했습니다. 다시 로그인하세요.' : '선택한 역할의 비밀번호를 재설정했습니다.';
+  }).withFailureHandler(error => {
+    control.disabled = false;
+    form.reset();
+    if (error.message.includes('로그인이 필요합니다.')) resetLogin();
+    $('notice').textContent = error.message;
+  }).updateRegisterPassword(session, target, current, password);
 });
 $('logout').addEventListener('click', () => {
   google.script.run.registerLogout(session);

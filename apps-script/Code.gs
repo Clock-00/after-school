@@ -32,7 +32,45 @@ function setRolePasswordFromSheet(role, password) {
   const owner = spreadsheet?.getOwner();
   if (!owner || Session.getActiveUser().getEmail() !== owner.getEmail()) throw new Error('대장 소유자만 비밀번호를 설정할 수 있습니다.');
   if (!Object.hasOwn(ROLES, role) || !validRolePassword_(password)) throw new Error('비밀번호는 9~128자로 입력하세요.');
-  PropertiesService.getScriptProperties().setProperty('role-password:' + role, registerDigest_(password));
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    storeRolePassword_(PropertiesService.getScriptProperties(), role, password);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function storeRolePassword_(properties, role, password) {
+  // A fresh salt also invalidates old sessions when a password is reused.
+  const salt = randomRegisterToken_();
+  properties.setProperty('role-password:' + role, salt + ':' + registerDigest_(salt + password));
+}
+
+function verifyRolePassword_(stored, password) {
+  if (!stored || !validRolePassword_(password)) return false;
+  const parts = stored.split(':');
+  return parts.length === 2
+    ? parts[1] === registerDigest_(parts[0] + password)
+    : stored === registerDigest_(password);
+}
+
+function updateRegisterPassword(token, target, current, password) {
+  const properties = PropertiesService.getScriptProperties();
+  const lock = LockService.getScriptLock();
+  lock.waitLock(10000);
+  try {
+    const session = registerSession_(token, properties);
+    if (!Object.hasOwn(ROLES, target) || (session.role !== 'admin' && session.role !== target)) {
+      throw new Error('이 역할의 비밀번호를 변경할 권한이 없습니다.');
+    }
+    if (!verifyRolePassword_(session.expected, current)) throw new Error('현재 로그인한 역할의 비밀번호를 확인하세요.');
+    if (!validRolePassword_(password)) throw new Error('새 비밀번호는 9~128자로 입력하세요.');
+    storeRolePassword_(properties, target, password);
+    return {signedOut: session.role === target};
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function validRolePassword_(value) {
@@ -52,7 +90,7 @@ function registerLogin(role, password) {
   if (!Object.hasOwn(ROLES, role) || !validRolePassword_(password)) throw new Error(invalid);
   const properties = PropertiesService.getScriptProperties();
   const expected = properties.getProperty('role-password:' + role);
-  if (!expected || expected !== registerDigest_(password)) throw new Error(invalid);
+  if (!verifyRolePassword_(expected, password)) throw new Error(invalid);
   const token = randomRegisterToken_();
   CacheService.getScriptCache().put('register-session:' + registerDigest_(token),
     JSON.stringify({role, expected}), 21600);
