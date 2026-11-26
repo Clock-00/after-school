@@ -32,7 +32,6 @@
     <h2>역할별 로그인</h2>
     <form id="login-form">
       <label>역할<select name="role" required><option value="staff">업무 담당자</option><option value="approver">승인 담당자</option><option value="admin">관리자</option></select></label>
-      <label>아이디(이메일)<input name="email" type="email" autocomplete="username" required></label>
       <label>접속 코드<input name="code" type="password" autocomplete="current-password" required></label>
       <button>로그인</button>
     </form>
@@ -322,7 +321,7 @@ $('login-form').addEventListener('submit', event => {
   event.preventDefault();
   const form = event.currentTarget;
   const control = form.querySelector('button');
-  const {email, role, code} = Object.fromEntries(new FormData(form));
+  const {role, code} = Object.fromEntries(new FormData(form));
   control.disabled = true;
   google.script.run.withSuccessHandler(token => {
     control.disabled = false;
@@ -333,7 +332,7 @@ $('login-form').addEventListener('submit', event => {
     control.disabled = false;
     form.elements.code.value = '';
     $('notice').textContent = error.message;
-  }).registerLogin(email, role, code);
+  }).registerLogin(role, code);
 });
 $('logout').addEventListener('click', () => {
   google.script.run.registerLogout(session);

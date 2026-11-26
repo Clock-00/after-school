@@ -42,20 +42,21 @@ function registerDigest_(value) {
   return Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, value));
 }
 
-function registerLogin(email, role, code) {
-  email = typeof email === 'string' ? email.trim().toLowerCase() : '';
+function registerLogin(role, code) {
+  const invalid = '역할과 접속 코드를 확인하세요.';
   if (!Object.hasOwn(ROLES, role) || typeof code !== 'string' || !/^[a-f0-9]{64}$/.test(code)) {
-    throw new Error('아이디와 역할, 접속 코드를 확인하세요.');
+    throw new Error(invalid);
   }
-  const properties = PropertiesService.getScriptProperties();
-  const sheetId = properties.getProperty('REGISTER_SHEET');
-  const expected = properties.getProperty('register-code:' + email);
-  if (!sheetId || !expected || expected !== registerDigest_(code)
-      || !rows_(SpreadsheetApp.openById(sheetId), '사용자').some(user => user.email === email && user.role === role)) {
-    throw new Error('아이디와 역할, 접속 코드를 확인하세요.');
-  }
+  const properties = PropertiesService.getScriptProperties().getProperties();
+  const sheetId = properties.REGISTER_SHEET;
+  if (!sheetId) throw new Error('대장 초기 설정이 필요합니다.');
+  const digest = registerDigest_(code);
+  const users = rows_(SpreadsheetApp.openById(sheetId), '사용자');
+  const user = users.find(account => account.role === role && properties['register-code:' + account.email] === digest);
+  if (!user) throw new Error(invalid);
   const token = randomRegisterToken_();
-  CacheService.getScriptCache().put('register-session:' + registerDigest_(token), JSON.stringify({email, role, expected}), 21600);
+  CacheService.getScriptCache().put('register-session:' + registerDigest_(token),
+    JSON.stringify({email: user.email, role, expected: digest}), 21600);
   return token;
 }
 
