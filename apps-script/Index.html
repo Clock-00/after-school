@@ -26,13 +26,13 @@
 </head>
 <body>
 <main>
-  <header><h1>백암초 방과후 강사대장</h1><p id="identity">역할을 선택하고 접속 코드를 입력하세요.</p></header>
+  <header><h1>백암초 방과후 강사대장</h1><p id="identity">역할을 선택하고 비밀번호를 입력하세요.</p></header>
   <p id="notice" role="status" aria-live="polite"></p>
   <section id="login-panel">
     <h2>역할별 로그인</h2>
     <form id="login-form">
       <label>역할<select name="role" required><option value="staff">업무 담당자</option><option value="approver">승인 담당자</option><option value="admin">관리자</option></select></label>
-      <label>접속 코드<input name="code" type="password" autocomplete="current-password" required></label>
+      <label>비밀번호<input name="code" type="password" autocomplete="current-password" required></label>
       <button>로그인</button>
     </form>
   </section>
@@ -84,15 +84,6 @@
       <h2>승인·발급대장</h2>
       <ul id="requests"></ul>
     </section>
-    <section id="user-panel" hidden>
-      <h2>담당자 권한</h2>
-      <form id="user-form">
-        <label>담당자 이메일<input name="email" type="email" required></label>
-        <label>역할<select name="role"><option value="staff">업무 담당자</option><option value="approver">승인 담당자</option><option value="disabled">접근 해제</option></select></label>
-        <button>권한 저장</button>
-      </form>
-      <ul id="users"></ul>
-    </section>
   </div>
 </main>
 <article id="paper"></article>
@@ -113,7 +104,6 @@ const $ = id => document.getElementById(id);
 const teacherForm = $('teacher-form');
 const contractForm = $('contract-form');
 const requestForm = $('request-form');
-const userForm = $('user-form');
 let state;
 let session;
 
@@ -226,14 +216,13 @@ function localDate(iso) {
 }
 
 function render() {
-  const {role, roles, email, schools, teachers, contracts, documents, requests, users} = state;
+  const {role, roles, schools, teachers, contracts, documents, requests} = state;
   const canEdit = ['admin', 'staff'].includes(role);
   const canReview = ['admin', 'approver'].includes(role);
-  $('identity').textContent = email + ' · ' + roles[role];
+  $('identity').textContent = roles[role];
   teacherForm.hidden = !canEdit;
   $('contract-panel').hidden = !canEdit;
   $('request-panel').hidden = !canEdit;
-  $('user-panel').hidden = role !== 'admin';
   const options = [['','강사 선택'], ...teachers.map(teacher => [teacher.id, teacherLabel(teacher)])];
   setOptions(contractForm.elements.teacherId, options);
   setOptions(requestForm.elements.teacherId, options);
@@ -244,11 +233,10 @@ function render() {
   setOptions($('year-filter'), [['','전체 학년도'], ...years.map(year => [year, year])]);
   renderTeachers();
   renderChoices();
-  $('users').replaceChildren(...users.map(user => element('li', user.email + ' · ' + (roles[user.role] || '접근 해제'))));
   $('requests').replaceChildren(...[...requests].reverse().map(request => {
     const row = element('li', `${request.teacherName} · ${documents[request.type]} · ${request.status} · ${localDate(request.requestedAt)}`);
     if (request.number) row.append(element('small', ' · ' + request.number));
-    if (request.status === '승인 대기' && canReview && request.requestedBy !== email) {
+    if (request.status === '승인 대기' && canReview && request.requestedRole !== role) {
       row.append(button('승인', () => review(request, '승인')), button('반려', () => review(request, '반려')));
     }
     row.append(button(request.status === '승인' ? '인쇄 / PDF 저장' : '발급 내용 보기', () => showDocument(request)));
@@ -300,7 +288,6 @@ function bindForm(form, action, message) {
 bindForm(teacherForm, 'teacher', '강사 기록을 저장했습니다.');
 bindForm(contractForm, 'contract', '계약 기록을 저장했습니다.');
 bindForm(requestForm, 'request', '발급을 요청했습니다.');
-bindForm(userForm, 'user', '담당자 권한을 저장했습니다.');
 for (const id of ['search','year-filter','school-filter','program-filter']) $(id).addEventListener('input', renderTeachers);
 requestForm.elements.teacherId.addEventListener('change', renderChoices);
 $('reload').addEventListener('click', () => invoke('read'));
@@ -312,9 +299,9 @@ function resetLogin() {
   state = undefined;
   $('workspace').hidden = true;
   $('login-panel').hidden = false;
-  $('identity').textContent = '역할을 선택하고 접속 코드를 입력하세요.';
-  for (const id of ['teachers','users','requests','preview-body','paper']) $(id).replaceChildren();
-  for (const form of [teacherForm, contractForm, requestForm, userForm]) form.reset();
+  $('identity').textContent = '역할을 선택하고 비밀번호를 입력하세요.';
+  for (const id of ['teachers','requests','preview-body','paper']) $(id).replaceChildren();
+  for (const form of [teacherForm, contractForm, requestForm]) form.reset();
 }
 
 $('login-form').addEventListener('submit', event => {
