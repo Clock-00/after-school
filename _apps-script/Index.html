@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style><?!= include_('Styles') ?></style>
+</head>
+<body>
+  <main class="main">
+    <h1>백암초 강사 경력관리</h1>
+    <p>본교·수정분교장 · 가상 데이터</p>
+    <p id="notice" role="status"></p>
+    <section id="gate" class="panel">
+      <h2>이메일 인증</h2>
+      <form id="login" class="filters">
+        <label>이메일<input id="email" type="email" autocomplete="email" required></label>
+        <label>메일에 적힌 인증번호<input id="code" autocomplete="one-time-code" maxlength="10"></label>
+        <button id="send" class="secondary-button" type="button">인증번호 받기</button>
+        <button class="secondary-button">로그인</button>
+      </form>
+    </section>
+    <section id="private" class="panel" hidden>
+      <p id="role"></p>
+      <button id="exit" class="secondary-button">로그아웃</button>
+      <h2>강사 경력 조회</h2>
+      <div id="filters" class="filters">
+        <label>이름<input id="name" type="search"></label>
+        <label>학년도<select id="year"></select></label>
+        <label>학교<select id="school"></select></label>
+        <label>프로그램<select id="program"></select></label>
+      </div>
+      <p id="count" role="status"></p>
+      <ul id="records" class="record-list"></ul>
+      <section id="admin" hidden>
+        <h2>담당자 초대</h2>
+        <form id="invite" class="filters">
+          <label>담당자 이메일<input id="invite-email" type="email" required></label>
+          <label>역할<select id="invite-role"><option value="staff">업무 담당자</option><option value="approver">승인 담당자</option></select></label>
+          <button class="secondary-button">초대 보내기</button>
+        </form>
+        <ul id="users" class="record-list"></ul>
+      </section>
+    </section>
+  </main>
+  <script>
+    const get = id => document.getElementById(id);
+    let credentials;
+    let data;
+    function call(method, ...args) {
+      return new Promise((resolve, reject) => {
+        google.script.run.withSuccessHandler(resolve).withFailureHandler(reject)[method](...args);
+      });
+    }
+    function action(id, eventName, run) {
+      const control = get(id);
+      control.addEventListener(eventName, async event => {
+        event.preventDefault();
+        const button = control.matches('button') ? control : control.querySelector('button');
+        if (button.disabled) return;
+        button.disabled = true;
+        notice('');
+        try { await run(); }
+        catch (error) { notice(error.message || '요청을 처리하지 못했습니다.'); }
+        finally { button.disabled = false; }
+      });
+    }
+    function notice(message) { get('notice').textContent = message; }
+    function options(id, all, pairs) {
+      get(id).replaceChildren(new Option(all, ''), ...pairs.map(([key, label]) => new Option(label, key)));
+    }
+    function render() {
+      const query = get('name').value.trim();
+      const year = get('year').value;
+      const school = get('school').value;
+      const program = get('program').value;
+      const names = new Map(data.instructors.map(item => [item.id, item.name]));
+      const records = data.records.filter(record => names.get(record.instructorId).includes(query)
+        && (!year || String(record.year) === year) && (!school || record.school === school)
+        && (!program || record.program === program));
+      get('count').textContent = '검색 결과 ' + records.length + '건';
+      get('records').replaceChildren(...records.map(record => {
+        const row = document.createElement('li');
+        const details = document.createElement('details');
+        const title = document.createElement('summary');
+        const body = document.createElement('p');
+        title.textContent = [names.get(record.instructorId), record.instructorId, record.year + '학년도',
+          data.schools[record.school], record.program, record.status].join(' · ');
+        body.textContent = '계약 ' + record.contract.join(' ~ ') + ' / 실제 활동 '
+          + (record.activity?.join(' ~ ') ?? '미확인') + ' / 강의시간 ' + (record.hours === null ? '미확인' : record.hours + '시간');
+        details.append(title, body);
+        row.append(details);
+        return row;
+      }));
+    }
+    async function refresh() {
+      data = await call('workspace', credentials);
+      options('year', '전체 학년도', [...new Set(data.records.map(record => record.year))]
+        .sort((a, b) => b - a).map(year => [year, year + '학년도']));
+      options('school', '전체 학교', Object.entries(data.schools));
+      options('program', '전체 프로그램', [...new Set(data.records.map(record => record.program))]
+        .sort().map(program => [program, program]));
+      get('role').textContent = data.label;
+      get('admin').hidden = data.role !== 'admin';
+      get('users').replaceChildren(...(data.users ?? []).map(user => {
+        const item = document.createElement('li');
+        item.textContent = user.email + ' · ' + (user.role === 'staff' ? '업무 담당자' : '승인 담당자') + ' ';
+        const button = document.createElement('button');
+        button.className = 'secondary-button';
+        button.textContent = '접근 해제';
+        button.addEventListener('click', async () => {
+          button.disabled = true;
+          try {
+            await call('revoke', credentials, user.email);
+            await refresh();
+            notice('접근을 해제했습니다.');
+          } catch (error) {
+            notice(error.message);
+            button.disabled = false;
+          }
+        });
+        item.append(button);
+        return item;
+      }));
+      render();
+      get('gate').hidden = true;
+      get('private').hidden = false;
+    }
+    action('send', 'click', async () => {
+      if (!get('email').reportValidity()) return;
+      await call('requestCode', get('email').value);
+      notice('등록된 이메일이면 인증번호가 발송됩니다.');
+    });
+    action('login', 'submit', async () => {
+      credentials = await call('login', get('email').value, get('code').value);
+      get('code').value = '';
+      if (!credentials) return notice('인증번호가 올바르지 않거나 만료되었습니다.');
+      await refresh();
+    });
+    action('invite', 'submit', async () => {
+      await call('invite', credentials, get('invite-email').value, get('invite-role').value);
+      get('invite').reset();
+      await refresh();
+      notice('초대 메일을 보냈습니다.');
+    });
+    action('exit', 'click', async () => {
+      try { await call('logout', credentials); }
+      finally {
+        credentials = data = undefined;
+        get('private').hidden = true;
+        get('gate').hidden = false;
+        get('records').replaceChildren();
+        get('users').replaceChildren();
+      }
+    });
+    get('filters').addEventListener('input', render);
+  </script>
+</body>
+</html>
